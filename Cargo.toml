@@ -1,0 +1,17 @@
+[package]
+name = "livecaptran"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "livecaptran"
+path = "src/main.rs"
+
+[dependencies]
+eframe = "0.31"
+cpal = "0.15"
+reqwest = { version = "0.12", features = ["blocking", "multipart"] }
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+image = { version = "0.25", default-features = false, features = ["png"] }
