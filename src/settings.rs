@@ -90,6 +90,8 @@ pub struct Settings {
     pub chat_model: String,
     pub target_language: String, // empty = no translation
     pub display_mode: DisplayMode,
+    pub opacity: u8,             // 0=transparent, 255=opaque
+    pub input_device: String,    // empty = system default
 }
 
 impl Default for Settings {
@@ -104,7 +106,9 @@ impl Default for Settings {
             chat_api_key: String::new(),
             chat_model: "gpt-4o".to_string(),
             target_language: "en".to_string(),
-            display_mode: DisplayMode::Both,
+            display_mode: DisplayMode::TranslationOnly,
+            opacity: 200,
+            input_device: String::new(),
         }
     }
 }

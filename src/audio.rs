@@ -55,7 +55,7 @@ fn translate_text(
     let mut messages = vec![serde_json::json!({
         "role": "system",
         "content": format!(
-            "You are a real-time translator for a scientific presentation. Translate the following spoken text into {}. Preserve technical and scientific terminology accurately. Print only the translation, nothing else.",
+            "You are a real-time translator for a scientific presentation. Translate the following spoken text into {}. Preserve technical and scientific terminology accurately. Output only a single, most probable translation. Print only the translated text and absolutely nothing else—no alternatives, no explanations, no notes, no quotation marks.",
             target_language
         )
     })];
@@ -191,9 +191,26 @@ pub fn start_audio_and_transcription(
         let buf = audio_buffer.clone();
         let sr = sample_rate.clone();
         let run = running.clone();
+        let input_device_name = settings.lock().unwrap().input_device.clone();
         thread::spawn(move || {
             let host = cpal::default_host();
-            let device = match host.default_input_device() {
+            let device = if input_device_name.is_empty() {
+                host.default_input_device()
+            } else {
+                use cpal::traits::HostTrait;
+                host.input_devices()
+                    .ok()
+                    .and_then(|mut devs| {
+                        devs.find(|d| {
+                            d.name().map(|n| n == input_device_name).unwrap_or(false)
+                        })
+                    })
+                    .or_else(|| {
+                        eprintln!("Device '{}' not found, using default", input_device_name);
+                        host.default_input_device()
+                    })
+            };
+            let device = match device {
                 Some(d) => d,
                 None => {
                     eprintln!("No audio input device found");

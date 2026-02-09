@@ -1,3 +1,4 @@
+use cpal::traits::{DeviceTrait, HostTrait};
 use eframe::egui;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -68,6 +69,16 @@ fn detect_resize_direction(ctx: &egui::Context) -> Option<egui::ResizeDirection>
     }
 }
 
+fn list_input_devices() -> Vec<String> {
+    let host = cpal::default_host();
+    host.input_devices()
+        .map(|devs| {
+            devs.filter_map(|d| d.name().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub struct App {
     transcript: Arc<Mutex<String>>,
     settings: Arc<Mutex<Settings>>,
@@ -84,6 +95,9 @@ pub struct App {
     edit_chat_model: String,
     edit_target_language: String,
     edit_display_mode: DisplayMode,
+    edit_opacity: u8,
+    edit_input_device: String,
+    input_devices: Vec<String>,
     cog_icon: egui::TextureHandle,
     close_icon: egui::TextureHandle,
 }
@@ -111,6 +125,10 @@ impl App {
         let edit_chat_model = loaded.chat_model.clone();
         let edit_target_language = loaded.target_language.clone();
         let edit_display_mode = loaded.display_mode.clone();
+        let edit_opacity = loaded.opacity;
+        let edit_input_device = loaded.input_device.clone();
+
+        let input_devices = list_input_devices();
 
         let settings = Arc::new(Mutex::new(loaded));
 
@@ -143,6 +161,9 @@ impl App {
             edit_chat_model,
             edit_target_language,
             edit_display_mode,
+            edit_opacity,
+            edit_input_device,
+            input_devices,
             cog_icon,
             close_icon,
         }
@@ -208,12 +229,15 @@ impl eframe::App for App {
             let edit_chat_model = &mut self.edit_chat_model;
             let edit_target_language = &mut self.edit_target_language;
             let edit_display_mode = &mut self.edit_display_mode;
+            let edit_opacity = &mut self.edit_opacity;
+            let edit_input_device = &mut self.edit_input_device;
+            let input_devices = &self.input_devices;
 
             ctx.show_viewport_immediate(
                 egui::ViewportId::from_hash_of("settings"),
                 egui::ViewportBuilder::default()
                     .with_title("LiveCapTran Settings")
-                    .with_inner_size([550.0, 470.0])
+                    .with_inner_size([550.0, 550.0])
                     .with_resizable(false)
                     .with_minimize_button(false)
                     .with_maximize_button(false)
@@ -342,6 +366,40 @@ impl eframe::App for App {
                                     );
                                 });
                                 ui.end_row();
+
+                                ui.label("");
+                                ui.separator();
+                                ui.end_row();
+
+                                ui.label("Opacity:");
+                                let mut opacity_f32 = *edit_opacity as f32;
+                                if ui.add(egui::Slider::new(&mut opacity_f32, 0.0..=255.0)).changed() {
+                                    *edit_opacity = opacity_f32 as u8;
+                                }
+                                ui.end_row();
+
+                                ui.label("Input Device:");
+                                egui::ComboBox::from_id_salt("input_device_combo")
+                                    .selected_text(if edit_input_device.is_empty() {
+                                        "Default"
+                                    } else {
+                                        edit_input_device.as_str()
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(
+                                            edit_input_device,
+                                            String::new(),
+                                            "Default",
+                                        );
+                                        for name in input_devices {
+                                            ui.selectable_value(
+                                                edit_input_device,
+                                                name.clone(),
+                                                name.as_str(),
+                                            );
+                                        }
+                                    });
+                                ui.end_row();
                             });
                     });
                 },
@@ -363,22 +421,43 @@ impl eframe::App for App {
             s.chat_model = self.edit_chat_model.clone();
             s.target_language = self.edit_target_language.clone();
             s.display_mode = self.edit_display_mode.clone();
+            s.opacity = self.edit_opacity;
+            s.input_device = self.edit_input_device.clone();
             s.save();
         }
 
         let font_size = self.edit_font_size;
 
         let panel_frame = egui::Frame::new()
-            .fill(egui::Color32::from_black_alpha(200))
+            .fill(egui::Color32::from_black_alpha(self.edit_opacity))
             .inner_margin(20.0);
 
         egui::CentralPanel::default()
             .frame(panel_frame)
             .show(ctx, |ui| {
-                // Centered transcript text (rendered first to use full area)
+                // Centered transcript text with auto-shrink
                 let text = self.transcript.lock().unwrap().clone();
                 let display = if text.is_empty() { "..." } else { &text };
                 let panel_rect = ui.max_rect();
+
+                // Find the largest font size that fits
+                let available = panel_rect.shrink(20.0); // account for inner margin
+                let min_size = 12.0_f32;
+                let mut size = font_size;
+                while size > min_size {
+                    let galley = ui.fonts(|f| {
+                        f.layout(
+                            display.to_string(),
+                            egui::FontId::proportional(size),
+                            egui::Color32::WHITE,
+                            available.width(),
+                        )
+                    });
+                    if galley.size().y <= available.height() {
+                        break;
+                    }
+                    size = (size - 2.0).max(min_size);
+                }
 
                 ui.allocate_new_ui(egui::UiBuilder::new().max_rect(panel_rect), |ui| {
                     ui.with_layout(
@@ -388,7 +467,7 @@ impl eframe::App for App {
                                 egui::Label::new(
                                     egui::RichText::new(display)
                                         .color(egui::Color32::WHITE)
-                                        .size(font_size),
+                                        .size(size),
                                 )
                                 .selectable(false)
                                 .sense(egui::Sense::drag()),
@@ -427,6 +506,10 @@ impl eframe::App for App {
                         self.edit_chat_model = s.chat_model.clone();
                         self.edit_target_language = s.target_language.clone();
                         self.edit_display_mode = s.display_mode.clone();
+                        self.edit_opacity = s.opacity;
+                        self.edit_input_device = s.input_device.clone();
+                        drop(s);
+                        self.input_devices = list_input_devices();
                     }
                 }
 
