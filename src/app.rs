@@ -83,6 +83,7 @@ pub struct App {
     transcript: Arc<Mutex<String>>,
     settings: Arc<Mutex<Settings>>,
     running: Arc<AtomicBool>,
+    session_active: Arc<AtomicBool>,
     positioned: bool,
     show_settings: bool,
     edit_api_url: String,
@@ -114,6 +115,7 @@ impl App {
 
         let transcript = Arc::new(Mutex::new(String::new()));
         let running = Arc::new(AtomicBool::new(true));
+        let session_active = Arc::new(AtomicBool::new(false));
 
         let edit_api_url = loaded.api_url.clone();
         let edit_api_key = loaded.api_key.clone();
@@ -132,7 +134,12 @@ impl App {
 
         let settings = Arc::new(Mutex::new(loaded));
 
-        start_audio_and_transcription(transcript.clone(), running.clone(), settings.clone());
+        start_audio_and_transcription(
+            transcript.clone(),
+            running.clone(),
+            settings.clone(),
+            session_active.clone(),
+        );
 
         let cog_icon = load_icon(
             &cc.egui_ctx,
@@ -149,6 +156,7 @@ impl App {
             transcript,
             settings,
             running,
+            session_active,
             positioned: false,
             show_settings: false,
             edit_api_url,
@@ -478,6 +486,33 @@ impl eframe::App for App {
                         },
                     );
                 });
+
+                // Session start/stop button
+                let session_rect = egui::Rect::from_min_size(
+                    egui::pos2(panel_rect.right() - 96.0, panel_rect.top()),
+                    egui::vec2(32.0, 32.0),
+                );
+                let is_active = self.session_active.load(Ordering::Relaxed);
+                let session_btn = ui.put(
+                    session_rect,
+                    egui::Button::new(
+                        egui::RichText::new(if is_active { "STOP" } else { "REC" })
+                            .color(if is_active {
+                                egui::Color32::from_rgb(255, 80, 80)
+                            } else {
+                                egui::Color32::from_rgb(80, 255, 80)
+                            })
+                            .size(12.0),
+                    )
+                    .frame(false),
+                );
+                if session_btn.clicked() {
+                    let new_state = !is_active;
+                    self.session_active.store(new_state, Ordering::Relaxed);
+                    if !new_state {
+                        *self.transcript.lock().unwrap() = String::new();
+                    }
+                }
 
                 // Settings button overlaid to the left of close button
                 let settings_rect = egui::Rect::from_min_size(

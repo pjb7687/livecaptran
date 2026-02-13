@@ -117,6 +117,7 @@ fn send_transcription(
     target_language: &str,
     display_mode: &DisplayMode,
     history: &mut VecDeque<(String, String)>,
+    log_file: &mut Option<std::fs::File>,
 ) {
     let wav = encode_wav(samples, rate);
     let form = reqwest::blocking::multipart::Form::new()
@@ -141,8 +142,8 @@ fn send_transcription(
                     if let Some(text) = json["text"].as_str() {
                         let text = text.trim().to_string();
                         if !text.is_empty() {
-                            let display = if !target_language.is_empty() {
-                                if let Some(translated) = translate_text(
+                            let maybe_translated = if !target_language.is_empty() {
+                                translate_text(
                                     client,
                                     &text,
                                     chat_api_url,
@@ -150,20 +151,34 @@ fn send_transcription(
                                     chat_model,
                                     target_language,
                                     history,
-                                ) {
-                                    // Store in history for future context
-                                    history.push_back((text.clone(), translated.clone()));
-                                    if history.len() > 3 {
-                                        history.pop_front();
+                                )
+                            } else {
+                                None
+                            };
+
+                            // Log to session file
+                            if let Some(file) = log_file {
+                                use std::io::Write;
+                                let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+                                let _ = writeln!(file, "[{}] {}", now, &text);
+                                if let Some(ref tr) = maybe_translated {
+                                    let _ = writeln!(file, "[{}] {}", now, tr);
+                                }
+                                let _ = writeln!(file, "---");
+                                let _ = file.flush();
+                            }
+
+                            // Build display string
+                            let display = if let Some(translated) = maybe_translated {
+                                history.push_back((text.clone(), translated.clone()));
+                                if history.len() > 3 {
+                                    history.pop_front();
+                                }
+                                match display_mode {
+                                    DisplayMode::TranslationOnly => translated,
+                                    DisplayMode::Both => {
+                                        format!("{text}\n{translated}")
                                     }
-                                    match display_mode {
-                                        DisplayMode::TranslationOnly => translated,
-                                        DisplayMode::Both => {
-                                            format!("{text}\n{translated}")
-                                        }
-                                    }
-                                } else {
-                                    text
                                 }
                             } else {
                                 text
@@ -182,6 +197,7 @@ pub fn start_audio_and_transcription(
     transcript: Arc<Mutex<String>>,
     running: Arc<AtomicBool>,
     settings: Arc<Mutex<Settings>>,
+    session_active: Arc<AtomicBool>,
 ) {
     let audio_buffer: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
     let sample_rate: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
@@ -303,6 +319,8 @@ pub fn start_audio_and_transcription(
             let mut phrase: Vec<f32> = Vec::new();
             let mut silence_count: usize = 0;
             let mut translation_history: VecDeque<(String, String)> = VecDeque::new();
+            let mut log_file: Option<std::fs::File> = None;
+            let mut was_session_active = false;
 
             while run.load(Ordering::Relaxed) {
                 thread::sleep(Duration::from_millis(50));
@@ -318,6 +336,32 @@ pub fn start_audio_and_transcription(
                 };
 
                 if new_samples.is_empty() {
+                    continue;
+                }
+
+                // Session state transitions
+                let is_active = session_active.load(Ordering::Relaxed);
+                if is_active && !was_session_active {
+                    let dir = crate::settings::sessions_dir();
+                    let filename = format!(
+                        "session_{}.txt",
+                        chrono::Local::now().format("%Y-%m-%d_%H-%M-%S")
+                    );
+                    match std::fs::File::create(dir.join(&filename)) {
+                        Ok(f) => log_file = Some(f),
+                        Err(e) => eprintln!("Failed to create session log: {e}"),
+                    }
+                    was_session_active = true;
+                } else if !is_active && was_session_active {
+                    log_file = None;
+                    *transcript.lock().unwrap() = String::new();
+                    phrase.clear();
+                    speaking = false;
+                    silence_count = 0;
+                    was_session_active = false;
+                }
+
+                if !is_active {
                     continue;
                 }
 
@@ -369,6 +413,7 @@ pub fn start_audio_and_transcription(
                                 &target_language,
                                 &display_mode,
                                 &mut translation_history,
+                                &mut log_file,
                             );
                         }
                         phrase.clear();

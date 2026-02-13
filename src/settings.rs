@@ -120,6 +120,18 @@ fn config_path() -> PathBuf {
         .join("settings.yml")
 }
 
+pub fn sessions_dir() -> PathBuf {
+    let exe = std::env::current_exe().unwrap_or_default();
+    let dir = exe
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("sessions");
+    if !dir.exists() {
+        let _ = std::fs::create_dir_all(&dir);
+    }
+    dir
+}
+
 impl Settings {
     pub fn load() -> Self {
         let path = config_path();
